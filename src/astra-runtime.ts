@@ -235,16 +235,51 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
             });
         }, null);
     };
+    const rgba = function (digits) {
+        let h = digits;
+        if (h.length === 3) h = h.charAt(0) + h.charAt(0) + h.charAt(1) + h.charAt(1) + h.charAt(2) + h.charAt(2);
+        const ch = function (i) { return parseInt(h.slice(i, i + 2), 16) / 255; };
+        return { r: ch(0), g: ch(2), b: ch(4), a: h.length === 8 ? ch(6) : 1 };
+    };
+    const STOP = /^(#[0-9a-f]+)(?:@(\d*\.?\d+))?(?::(\d*\.?\d+))?$/i;
+    const frac = function (x) {
+        const n = parseFloat(x);
+        return n > 1 ? n / 100 : n;
+    };
+    const r6 = function (x) { return Math.round(x * 1e6) / 1e6 + 0; };
+    const gradient = function (s, kind, args) {
+        let stopArgs = args;
+        let tf = [[1, 0, 0], [0, 1, 0]];
+        if (kind === 'lin') {
+            const am = /^(-?\d+(?:\.\d+)?)(?:deg)?$/.exec(args[0]);
+            if (!am) { warn("color: '" + s + "' needs an angle first"); return null; }
+            const turn = (parseFloat(am[1]) - 90) * Math.PI / 180;
+            const c = Math.cos(turn);
+            const sn = Math.sin(turn);
+            const len = Math.abs(c) + Math.abs(sn);
+            tf = [[r6(c / len), r6(sn / len), r6(0.5 - (c + sn) / (2 * len))], [r6(-sn), r6(c), r6(0.5 + (sn - c) / 2)]];
+            stopArgs = args.slice(1);
+        }
+        if (stopArgs.length < 2) { warn("color: '" + s + "' needs two stops or more"); return null; }
+        const stops = [];
+        for (let i = 0; i < stopArgs.length; i++) {
+            const m = STOP.exec(stopArgs[i]);
+            const hx = m ? HEX.exec(m[1]) : null;
+            const a = m && m[2] !== undefined ? frac(m[2]) : 1;
+            const pos = m && m[3] !== undefined ? frac(m[3]) : i / (stopArgs.length - 1);
+            if (!hx || a > 1 || pos > 1) { warn("color: '" + s + "' stop '" + stopArgs[i] + "' is not #hex[@alpha][:pos]"); return null; }
+            const c = rgba(hx[1]);
+            stops.push({ position: pos, color: { r: c.r, g: c.g, b: c.b, a: c.a * a } });
+        }
+        return { grad: { type: kind === 'lin' ? 'GRADIENT_LINEAR' : 'GRADIENT_RADIAL', gradientTransform: tf, gradientStops: stops } };
+    };
     const color = function (str) {
         const s = String(str);
         if (s === 'none') return { none: true };
+        const gm = /^(lin|rad)\((.*)\)$/.exec(s);
+        if (gm) return gradient(s, gm[1], gm[2].split(','));
         const hx = HEX.exec(s);
-        if (hx) {
-            let h = hx[1];
-            if (h.length === 3) h = h.charAt(0) + h.charAt(0) + h.charAt(1) + h.charAt(1) + h.charAt(2) + h.charAt(2);
-            const ch = function (i) { return parseInt(h.slice(i, i + 2), 16) / 255; };
-            return { hex: { r: ch(0), g: ch(2), b: ch(4), a: h.length === 8 ? ch(6) : 1 } };
-        }
+        if (hx) return { hex: rgba(hx[1]) };
         const vars = kitNames('variables', 'COLOR');
         const vm = matchName(s, vars);
         if (vm.hit) return { v: varDep(vm.hit) };
@@ -257,17 +292,19 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
 
     const shadowsOf = function (level, shc) {
         const sc = shc === undefined ? { r: 0, g: 0, b: 0, a: 1 } : color(shc).hex;
-        const n = level + 2;
+        const n = 6;
         const y = Math.pow(2, level);
+        let weights = 0;
+        for (let j = 1; j <= n; j++) weights += 1 - 0.5 * j / n;
         const out = [];
         for (let j = 1; j <= n; j++) {
             const t = j / n;
-            const e = t * t;
+            const off = y / Math.pow(2, n - j);
             out.push({
                 type: 'DROP_SHADOW',
-                color: { r: sc.r, g: sc.g, b: sc.b, a: Math.round(0.3 / n * (1 - 0.5 * e) * 1000) / 1000 * sc.a },
-                offset: { x: 0, y: Math.round(y * e * 100) / 100 },
-                radius: Math.round(2 * y * e * 100) / 100,
+                color: { r: sc.r, g: sc.g, b: sc.b, a: Math.round(0.3 * (1 - 0.5 * t) / weights * 1000) / 1000 * sc.a },
+                offset: { x: 0, y: Math.round(off * 100) / 100 },
+                radius: Math.round(off * (1 + 2 * t) * 100) / 100,
                 spread: 0,
                 visible: true,
                 blendMode: 'NORMAL',
@@ -459,6 +496,7 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
             if (!d) return;
             if (d.none) node[field] = [];
             else if (d.hex) node[field] = [{ type: 'SOLID', color: { r: d.hex.r, g: d.hex.g, b: d.hex.b }, opacity: d.hex.a }];
+            else if (d.grad) node[field] = [d.grad];
             else if (d.v && ok(d.v)) node[field] = [figma.variables.setBoundVariableForPaint({ type: 'SOLID', color: { r: 0, g: 0, b: 0 } }, 'color', D[d.v].value)];
             else if (d.s && ok(d.s)) {
                 const id = D[d.s].value.id;

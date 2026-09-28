@@ -550,15 +550,30 @@ describe('shadow and noise presets', () => {
 		expect(parse('noise:3')).toEqual({ p: {}, warn: ["props: 'noise:3' opacity is not between 0 and 1"] });
 	});
 
-	it('sets five drop shadows for sh3', async () => {
+	it('sets six drop shadows for sh3, the blur growing faster than the offset', async () => {
 		const fx = await pageEffects('sh3');
 		expect(fx.map((e: any) => [e.type, e.offset.y, e.radius])).toEqual([
-			['DROP_SHADOW', 0.32, 0.64],
-			['DROP_SHADOW', 1.28, 2.56],
-			['DROP_SHADOW', 2.88, 5.76],
-			['DROP_SHADOW', 5.12, 10.24],
-			['DROP_SHADOW', 8, 16],
+			['DROP_SHADOW', 0.25, 0.33],
+			['DROP_SHADOW', 0.5, 0.83],
+			['DROP_SHADOW', 1, 2],
+			['DROP_SHADOW', 2, 4.67],
+			['DROP_SHADOW', 4, 10.67],
+			['DROP_SHADOW', 8, 24],
 		]);
+	});
+
+	it('makes each sh3 layer fainter than the one before', async () => {
+		const fx = await pageEffects('sh3');
+		expect(fx.map((e: any) => e.color.a)).toEqual([0.065, 0.059, 0.053, 0.047, 0.041, 0.035]);
+	});
+
+	it('sums the alphas of every level to 0.3', async () => {
+		const sums = [];
+		for (const level of [1, 2, 3, 4, 5]) {
+			const fx = await pageEffects('sh' + level);
+			sums.push(Math.round(fx.reduce((s: number, e: any) => s + e.color.a, 0) * 1000) / 1000);
+		}
+		expect(sums).toEqual([0.3, 0.3, 0.3, 0.3, 0.3]);
 	});
 
 	it('colours the shadows from the hex', async () => {
@@ -569,6 +584,9 @@ describe('shadow and noise presets', () => {
 	it('puts the noise after the shadows', async () => {
 		const fx = await pageEffects('sh1 noise:0.08');
 		expect(fx.map((e: any) => [e.type, e.type === 'NOISE' ? [e.noiseType, e.color.a] : null])).toEqual([
+			['DROP_SHADOW', null],
+			['DROP_SHADOW', null],
+			['DROP_SHADOW', null],
 			['DROP_SHADOW', null],
 			['DROP_SHADOW', null],
 			['DROP_SHADOW', null],
@@ -603,7 +621,7 @@ describe('shadow and noise presets', () => {
 		it('keeps the shadows', async () => {
 			const { made, result } = setup();
 			await result;
-			expect(made().effects.map((e: any) => e.type)).toEqual(['DROP_SHADOW', 'DROP_SHADOW', 'DROP_SHADOW']);
+			expect(made().effects.map((e: any) => e.type)).toEqual(Array(6).fill('DROP_SHADOW'));
 		});
 
 		it('warns the skipped noise', async () => {
@@ -629,7 +647,7 @@ describe('a replace in place', () => {
 		const old = f.node('FRAME', { name: 'P', x: 500, y: 40 });
 		const other = f.node('FRAME', { name: 'A' });
 		const dupe = f.node('FRAME', { name: 'P' });
-		[old, other, dupe].forEach((n) => f.figma.currentPage.appendChild(n));
+		for (const n of [old, other, dupe]) f.figma.currentPage.appendChild(n);
 		const res = await build(f.figma, null, ({ page, frame }) => {
 			page('P', 'v', [frame('h')]);
 		});
@@ -802,5 +820,95 @@ describe('del', () => {
 			add('Slot', [frame('#X')]);
 		});
 		expect([old.removed, slot.children.map((n: any) => n.id)]).toEqual([true, [res.ids.X]]);
+	});
+});
+
+describe('gradient fills', () => {
+	const paint = async (props: string, field = 'fills') => {
+		const f = fakeFigma();
+		const res = await build(f.figma, null, ({ page }) => {
+			page('P', props, []);
+		});
+		const node = f.figma.currentPage.children.filter((n: any) => n.id === res.ids.P)[0];
+		return { paints: node[field], warn: res.warn };
+	};
+	const BLACK = { r: 0, g: 0, b: 0, a: 1 };
+	const WHITE = { r: 1, g: 1, b: 1, a: 1 };
+
+	it('sets a linear paint from top to bottom for 180', async () => {
+		const { paints } = await paint('bg:lin(180,#000,#fff)');
+		expect(paints).toEqual([
+			{
+				type: 'GRADIENT_LINEAR',
+				gradientTransform: [
+					[0, 1, 0],
+					[-1, 0, 1],
+				],
+				gradientStops: [
+					{ position: 0, color: BLACK },
+					{ position: 1, color: WHITE },
+				],
+			},
+		]);
+	});
+
+	it.each([
+		['0', [[0, -1, 1], [1, 0, 0]]],
+		['90', [[1, 0, 0], [0, 1, 0]]],
+		['45', [[0.5, -0.5, 0.5], [0.707107, 0.707107, -0.207107]]],
+		['270deg', [[-1, 0, 1], [0, -1, 1]]],
+	])('turns angle %s into its transform', async (angle, t) => {
+		const { paints } = await paint('bg:lin(' + angle + ',#000,#fff)');
+		expect(paints[0].gradientTransform).toEqual(t);
+	});
+
+	it('spreads stops without a position evenly', async () => {
+		const { paints } = await paint('bg:lin(90,#000,#fff,#000)');
+		expect(paints[0].gradientStops.map((s: any) => s.position)).toEqual([0, 0.5, 1]);
+	});
+
+	it('reads an alpha and a position as a fraction or a percent', async () => {
+		const { paints } = await paint('bg:lin(90,#ffffff@0.5:0.2,#000000@50:80)');
+		expect(paints[0].gradientStops).toEqual([
+			{ position: 0.2, color: { r: 1, g: 1, b: 1, a: 0.5 } },
+			{ position: 0.8, color: { r: 0, g: 0, b: 0, a: 0.5 } },
+		]);
+	});
+
+	it('multiplies the alpha of an eight-digit hex', async () => {
+		const { paints } = await paint('bg:lin(90,#00000080@0.5,#000)');
+		expect(paints[0].gradientStops[0].color.a).toBeCloseTo((128 / 255) * 0.5, 6);
+	});
+
+	it('sets a radial paint centred on the box', async () => {
+		const { paints } = await paint('bg:rad(#ff0000,#ff000000)');
+		expect(paints).toEqual([
+			{
+				type: 'GRADIENT_RADIAL',
+				gradientTransform: [
+					[1, 0, 0],
+					[0, 1, 0],
+				],
+				gradientStops: [
+					{ position: 0, color: { r: 1, g: 0, b: 0, a: 1 } },
+					{ position: 1, color: { r: 1, g: 0, b: 0, a: 0 } },
+				],
+			},
+		]);
+	});
+
+	it('sets a gradient stroke', async () => {
+		const { paints } = await paint('stroke:lin(90,#000,#fff)', 'strokes');
+		expect(paints.map((p: any) => p.type)).toEqual(['GRADIENT_LINEAR']);
+	});
+
+	it.each([
+		['lin(90,red,#fff)', "color: 'lin(90,red,#fff)' stop 'red' is not #hex[@alpha][:pos]"],
+		['lin(90,#fff@200,#000)', "color: 'lin(90,#fff@200,#000)' stop '#fff@200' is not #hex[@alpha][:pos]"],
+		['rad(#fff)', "color: 'rad(#fff)' needs two stops or more"],
+		['lin(#fff,#000)', "color: 'lin(#fff,#000)' needs an angle first"],
+	])('warns %s and sets no paint', async (token, message) => {
+		const { paints, warn } = await paint('bg:' + token);
+		expect([warn, paints]).toEqual([[message], []]);
 	});
 });
