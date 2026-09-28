@@ -36,6 +36,7 @@ import {
 } from "./core/figma-api.js";
 import { registerFigmaAPITools } from "./core/figma-tools.js";
 import { registerDesignCodeTools } from "./core/design-code-tools.js";
+import { applyToolAllowlist, registerAstraTools } from "./astra.js";
 import { FigmaDesktopConnector } from "./core/figma-desktop-connector.js";
 import type { IFigmaConnector } from "./core/figma-connector.js";
 import { FigmaWebSocketServer } from "./core/websocket-server.js";
@@ -75,7 +76,7 @@ class LocalFigmaConsoleMCP {
 				version: "0.1.0",
 			},
 			{
-				instructions: `## Figma Console MCP - Visual Design Workflow
+				instructions: process.env.FIGMA_TOOLS ? undefined : `## Figma Console MCP - Visual Design Workflow
 
 This MCP server enables AI-assisted design creation in Figma. Follow these mandatory workflows:
 
@@ -5088,6 +5089,7 @@ return {
 			() => this.getCurrentFileUrl(),
 			this.variablesCache,
 		);
+		registerAstraTools(this.server, () => this.getDesktopConnector());
 
 		// MCP Apps - gated behind ENABLE_MCP_APPS env var
 		if (process.env.ENABLE_MCP_APPS === "true") {
@@ -5436,6 +5438,7 @@ return {
 			logger.info("MCP Apps registered (ENABLE_MCP_APPS=true)");
 		}
 
+		applyToolAllowlist(this.server, process.env.FIGMA_TOOLS);
 		logger.info(
 			"All MCP tools registered successfully (including write operations)",
 		);

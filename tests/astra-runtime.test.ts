@@ -1,4 +1,5 @@
 import { ASTRA_RUNTIME, KIT_SYNC_CODE } from '../src/astra-runtime';
+import { assembleBuild } from '../src/astra';
 
 const runtime: any = new Function('return (' + ASTRA_RUNTIME + ')')();
 
@@ -498,5 +499,15 @@ describe('clone and export', () => {
 		expect(res.exports).toEqual([
 			{ name: 'P', fmt: 'png@4.17', ext: 'png', scale: 4.17, outline: false, b64: 'QUJD' },
 		]);
+	});
+});
+
+describe('the code the server assembles', () => {
+	it('runs the verbs and returns the build result', async () => {
+		const f = fakeFigma();
+		const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+		const code = assembleBuild(null, "page('P','v w390',[text('Hi')])", {}, OPTS);
+		const res = await new AsyncFunction('figma', code)(f.figma);
+		expect(Object.keys(res.ids)).toEqual(['P']);
 	});
 });
