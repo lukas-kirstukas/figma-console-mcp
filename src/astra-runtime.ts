@@ -178,6 +178,12 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
     };
     const clone = function (src, name, swaps) { jobs.push({ kind: 'clone', src: src, name: name, swaps: swaps || {} }); };
     const edit = function (name, swaps) { jobs.push({ kind: 'edit', src: name, name: name, swaps: swaps || {} }); };
+    const add = function (target, kids) {
+        const v = vnode('add', '');
+        v.kids = kidsOf(kids);
+        jobs.push({ kind: 'add', src: target, name: target, v: v });
+    };
+    const del = function (name) { jobs.push({ kind: 'del', src: name, name: name }); };
     const exp = function (name, fmt) { exps.push({ name: name, fmt: fmt || 'png' }); };
 
     const D = {};
@@ -400,6 +406,16 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
             if (j.kind === 'page') { collect(j.v); return; }
             j.node = findNode(j.src);
             if (!j.node) { warn(j.kind + ": no node '" + j.src + "'" + near(j.src, topNames())); j.skip = true; return; }
+            if (j.kind === 'del') return;
+            if (j.kind === 'add') {
+                if (['FRAME', 'COMPONENT', 'GROUP', 'SECTION'].indexOf(j.node.type) < 0) {
+                    warn("add: '" + j.src + "' is a " + j.node.type + ' and takes no children');
+                    j.skip = true;
+                    return;
+                }
+                collect(j.v);
+                return;
+            }
             j.sw = Object.keys(j.swaps).map(function (k) { return collectSwap(j, k, j.swaps[k]); });
         });
 
@@ -427,10 +443,14 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
         const created = [];
         const queue = [];
         const reps = [];
+        const dels = [];
         const ids = {};
         const imgs = [];
         let last = null;
-        const pre = figma.currentPage.children.slice();
+        const mine = function (n) { return created.some(function (c) { return c.id === n.id; }); };
+        const olds = function (name, n) {
+            return figma.currentPage.children.filter(function (c) { return c.name === name && c.id !== n.id && !mine(c); });
+        };
         const blocked = function (v) { return !!v.skip || v.needs.some(function (l) { return !ok(l); }); };
         const isAuto = function (n) { return !!n && !!n.layoutMode && n.layoutMode !== 'NONE'; };
         const imagePaint = function (im) { return { type: 'IMAGE', imageHash: im.image.hash, scaleMode: 'FILL' }; };
@@ -614,9 +634,9 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
             return n;
         };
         const place = function (n, name) {
-            const old = pre.filter(function (o) { return o.name === name && !o.removed; })[0];
+            const old = olds(name, n)[0];
             if (old) {
-                reps.push([n, old]);
+                reps.push({ n: n, name: name });
                 n.x = old.x;
                 n.y = old.y;
                 return;
@@ -678,6 +698,12 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
                     applySwaps(j, c);
                     ids[j.name] = c.id;
                     last = c;
+                } else if (j.kind === 'add') {
+                    j.v.kids.forEach(function (k) { draw(k, j.node); });
+                    ids[j.name] = j.node.id;
+                    last = j.node;
+                } else if (j.kind === 'del') {
+                    dels.push(j.node);
                 } else {
                     applySwaps(j, j.node);
                     ids[j.name] = j.node.id;
@@ -702,14 +728,19 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
         });
 
         reps.forEach(function (r) {
-            const nw = r[0];
-            const old = r[1];
-            const par = old.parent;
-            par.insertChild(par.children.indexOf(old), nw);
-            nw.x = old.x;
-            nw.y = old.y;
-            old.remove();
+            const gone = olds(r.name, r.n);
+            if (!gone.length) return;
+            const at = figma.currentPage.children.findIndex(function (c) { return c.id === gone[0].id; });
+            figma.currentPage.insertChild(at, r.n);
+            r.n.x = gone[0].x;
+            r.n.y = gone[0].y;
+            gone.forEach(function (o) { o.remove(); });
         });
+        reps.forEach(function (r) {
+            const left = olds(r.name, r.n);
+            if (left.length) warn("replace '" + r.name + "': " + left.map(function (o) { return o.id; }).join(', ') + ' still on the page');
+        });
+        dels.forEach(function (n) { if (!n.removed) n.remove(); });
 
         const within = function (pr) {
             let tm = null;
@@ -779,7 +810,7 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
     };
 
     return {
-        verbs: { page: page, frame: frame, inst: inst, text: text, img: img, svg: svg, clone: clone, edit: edit, exp: exp },
+        verbs: { page: page, frame: frame, inst: inst, text: text, img: img, svg: svg, clone: clone, edit: edit, add: add, del: del, exp: exp },
         run: run,
         parseProps: parseProps,
         matchName: matchName,

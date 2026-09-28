@@ -622,3 +622,185 @@ describe('shadow and noise presets', () => {
 		expect(old.effects.length).toBe(6);
 	});
 });
+
+describe('a replace in place', () => {
+	it('replaces the first match at its index and removes the duplicate', async () => {
+		const f = fakeFigma();
+		const old = f.node('FRAME', { name: 'P', x: 500, y: 40 });
+		const other = f.node('FRAME', { name: 'A' });
+		const dupe = f.node('FRAME', { name: 'P' });
+		[old, other, dupe].forEach((n) => f.figma.currentPage.appendChild(n));
+		const res = await build(f.figma, null, ({ page, frame }) => {
+			page('P', 'v', [frame('h')]);
+		});
+		const kids = f.figma.currentPage.children;
+		expect([kids.map((n: any) => n.name), kids[0].id, kids[0].x, kids[0].y]).toEqual([
+			['P', 'A'],
+			res.ids.P,
+			500,
+			40,
+		]);
+	});
+
+	it('warns an old page that stays on the page', async () => {
+		const f = fakeFigma();
+		const old = f.node('FRAME', { name: 'P' });
+		old.remove = () => undefined;
+		f.figma.currentPage.appendChild(old);
+		const res = await build(f.figma, null, ({ page, frame }) => {
+			page('P', 'v', [frame('h')]);
+		});
+		expect(res.warn).toEqual(["replace 'P': " + old.id + ' still on the page']);
+	});
+});
+
+describe('add', () => {
+	const setup = (slotExtra: any = {}) => {
+		const f = fakeFigma();
+		const p = f.node('FRAME', { name: 'P' });
+		const slot = f.node('FRAME', Object.assign({ name: 'Slot' }, slotExtra));
+		const oldKid = f.node('FRAME', { name: 'Old' });
+		slot.appendChild(oldKid);
+		p.appendChild(slot);
+		f.figma.currentPage.appendChild(p);
+		return { f, p, slot };
+	};
+
+	it('appends the children after the existing ones', async () => {
+		const { f, slot } = setup();
+		const res = await build(f.figma, null, ({ add, frame, text }) => {
+			add('Slot', [frame('#Card w10 h10'), text('Hi', 'Inter 12 Bold')]);
+		});
+		expect([
+			slot.children.slice(0, 2).map((n: any) => n.name),
+			slot.children[2].type,
+			res.ids.Slot === slot.id,
+			res.ids.Card !== undefined,
+		]).toEqual([['Old', 'Card'], 'TEXT', true, true]);
+	});
+
+	it('loads the font of an added text', async () => {
+		const { f } = setup();
+		await build(f.figma, null, ({ add, text }) => {
+			add('Slot', [text('Hi', 'Inter 12 Bold')]);
+		});
+		expect(f.figma.loadFontAsync).toHaveBeenCalledWith({ family: 'Inter', style: 'Bold' });
+	});
+
+	it('warns a missing target with its nearest and creates nothing', async () => {
+		const { f } = setup();
+		const res = await build(f.figma, null, ({ add, frame }) => {
+			add('Nope', [frame('#Card')]);
+		});
+		expect([res.warn, f.figma.createFrame.mock.calls.length]).toEqual([["add: no node 'Nope' (nearest 'P')"], 0]);
+	});
+
+	it('warns a target that takes no children', async () => {
+		const f = fakeFigma();
+		f.figma.currentPage.appendChild(f.node('TEXT', { name: 'T' }));
+		const res = await build(f.figma, null, ({ add, frame }) => {
+			add('T', [frame('#Card')]);
+		});
+		expect(res.warn).toEqual(["add: 'T' is a TEXT and takes no children"]);
+	});
+
+	it('fills a width-less frame added to a vertical target', async () => {
+		const { f, slot } = setup({ layoutMode: 'VERTICAL' });
+		await build(f.figma, null, ({ add, frame }) => {
+			add('Slot', [frame('#Card')]);
+		});
+		expect(slot.children[1].layoutSizingHorizontal).toBe('FILL');
+	});
+
+	describe('a throw while adding', () => {
+		const run = () => {
+			const s = setup();
+			s.f.variant.createInstance.mockImplementation(() => {
+				throw new Error('boom');
+			});
+			const result = build(s.f.figma, KIT, ({ add, frame, inst }) => {
+				add('Slot', [frame('#Card'), inst('Chip', {})]);
+			});
+			return Object.assign(s, { result });
+		};
+
+		it('rejects with nothing kept', async () => {
+			const { result } = run();
+			await expect(result).rejects.toThrow('build failed, nothing kept: boom');
+		});
+
+		it('leaves the target children as they were', async () => {
+			const { slot, result } = run();
+			await result.catch(() => null);
+			expect(slot.children.map((n: any) => n.name)).toEqual(['Old']);
+		});
+	});
+});
+
+describe('del', () => {
+	const setup = () => {
+		const f = fakeFigma();
+		const p = f.node('FRAME', { name: 'P' });
+		const card = f.node('FRAME', { name: 'Card' });
+		p.appendChild(card);
+		f.figma.currentPage.appendChild(p);
+		return { f, p, card };
+	};
+
+	it('removes a top-level node', async () => {
+		const { f, p } = setup();
+		await build(f.figma, null, ({ del }) => {
+			del('P');
+		});
+		expect([p.removed, f.figma.currentPage.children.length]).toEqual([true, 0]);
+	});
+
+	it('removes a nested node and keeps its parent', async () => {
+		const { f, p } = setup();
+		await build(f.figma, null, ({ del }) => {
+			del('Card');
+		});
+		expect([f.figma.currentPage.children.map((n: any) => n.name), p.children.length]).toEqual([['P'], 0]);
+	});
+
+	it('warns a missing name with its nearest', async () => {
+		const { f } = setup();
+		const res = await build(f.figma, null, ({ del }) => {
+			del('Nope');
+		});
+		expect(res.warn).toEqual(["del: no node 'Nope' (nearest 'P')"]);
+	});
+
+	it('adds nothing to the ids', async () => {
+		const { f } = setup();
+		const res = await build(f.figma, null, ({ del }) => {
+			del('Card');
+		});
+		expect(res.ids).toEqual({});
+	});
+
+	it('deletes nothing when the build fails', async () => {
+		const { f, card } = setup();
+		f.variant.createInstance.mockImplementation(() => {
+			throw new Error('boom');
+		});
+		await build(f.figma, KIT, ({ del, page, inst }) => {
+			del('Card');
+			page('Q', 'v', [inst('Chip', {})]);
+		}).catch(() => null);
+		expect(card.removed).toBe(false);
+	});
+
+	it('removes the old node and keeps a new one of the same name', async () => {
+		const f = fakeFigma();
+		const old = f.node('FRAME', { name: 'X' });
+		const slot = f.node('FRAME', { name: 'Slot' });
+		f.figma.currentPage.appendChild(old);
+		f.figma.currentPage.appendChild(slot);
+		const res = await build(f.figma, null, ({ del, add, frame }) => {
+			del('X');
+			add('Slot', [frame('#X')]);
+		});
+		expect([old.removed, slot.children.map((n: any) => n.id)]).toEqual([true, [res.ids.X]]);
+	});
+});
