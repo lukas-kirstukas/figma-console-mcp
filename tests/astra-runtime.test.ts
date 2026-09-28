@@ -511,3 +511,114 @@ describe('the code the server assembles', () => {
 		expect(Object.keys(res.ids)).toEqual(['P']);
 	});
 });
+
+describe('shadow and noise presets', () => {
+	const parse = (s: string) => runtime(null, null, {}, OPTS).parseProps(s);
+	const pageEffects = async (props: string) => {
+		const f = fakeFigma();
+		const res = await build(f.figma, null, ({ page }) => {
+			page('P', props, []);
+		});
+		return f.figma.currentPage.children.filter((n: any) => n.id === res.ids.P)[0].effects;
+	};
+
+	it('reads sh3', () => {
+		expect(parse('sh3').p).toEqual({ sh: 3 });
+	});
+
+	it('reads sh3 with a colour', () => {
+		expect(parse('sh3:#000').p).toEqual({ sh: 3, shc: '#000' });
+	});
+
+	it('reads a bare noise', () => {
+		expect(parse('noise').p).toEqual({ noise: 0.1 });
+	});
+
+	it('reads a noise opacity', () => {
+		expect(parse('noise:0.08').p).toEqual({ noise: 0.08 });
+	});
+
+	it('warns sh6 as unknown', () => {
+		expect(parse('sh6').warn).toEqual(["props: unknown 'sh6' (nearest 'sh1')"]);
+	});
+
+	it('warns a colour that is not hex', () => {
+		expect(parse('sh2:red')).toEqual({ p: {}, warn: ["props: 'sh2:red' colour is not hex"] });
+	});
+
+	it('warns a noise opacity out of range', () => {
+		expect(parse('noise:3')).toEqual({ p: {}, warn: ["props: 'noise:3' opacity is not between 0 and 1"] });
+	});
+
+	it('sets five drop shadows for sh3', async () => {
+		const fx = await pageEffects('sh3');
+		expect(fx.map((e: any) => [e.type, e.offset.y, e.radius])).toEqual([
+			['DROP_SHADOW', 0.32, 0.64],
+			['DROP_SHADOW', 1.28, 2.56],
+			['DROP_SHADOW', 2.88, 5.76],
+			['DROP_SHADOW', 5.12, 10.24],
+			['DROP_SHADOW', 8, 16],
+		]);
+	});
+
+	it('colours the shadows from the hex', async () => {
+		const fx = await pageEffects('sh2:#ff0000');
+		expect(fx.map((e: any) => [e.color.r, e.color.g, e.color.b])[0]).toEqual([1, 0, 0]);
+	});
+
+	it('puts the noise after the shadows', async () => {
+		const fx = await pageEffects('sh1 noise:0.08');
+		expect(fx.map((e: any) => [e.type, e.type === 'NOISE' ? [e.noiseType, e.color.a] : null])).toEqual([
+			['DROP_SHADOW', null],
+			['DROP_SHADOW', null],
+			['DROP_SHADOW', null],
+			['NOISE', ['MONOTONE', 0.08]],
+		]);
+	});
+
+	describe('a node that refuses noise', () => {
+		const setup = () => {
+			const f = fakeFigma();
+			let made: any = null;
+			f.figma.createFrame.mockImplementation(() => {
+				const n = f.node('FRAME');
+				let fx: any[] = [];
+				Object.defineProperty(n, 'effects', {
+					get: () => fx,
+					set: (v: any[]) => {
+						if (v.some((e) => e.type === 'NOISE')) throw new Error('noise is beta');
+						fx = v;
+					},
+				});
+				f.figma.currentPage.appendChild(n);
+				made = made || n;
+				return n;
+			});
+			const result = build(f.figma, null, ({ page }) => {
+				page('P', 'sh1 noise', []);
+			});
+			return { made: () => made, result };
+		};
+
+		it('keeps the shadows', async () => {
+			const { made, result } = setup();
+			await result;
+			expect(made().effects.map((e: any) => e.type)).toEqual(['DROP_SHADOW', 'DROP_SHADOW', 'DROP_SHADOW']);
+		});
+
+		it('warns the skipped noise', async () => {
+			const { result } = setup();
+			expect((await result).warn).toEqual(['noise skipped: noise is beta']);
+		});
+	});
+
+	it('sets six shadows on an existing page through edit', async () => {
+		const f = fakeFigma();
+		const old = f.node('FRAME', { name: 'P' });
+		f.figma.currentPage.appendChild(old);
+		await build(f.figma, null, ({ edit }) => {
+			edit('P', { '.': 'sh4' });
+		});
+		expect(old.effects.length).toBe(6);
+	});
+});

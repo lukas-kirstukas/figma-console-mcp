@@ -76,8 +76,9 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
     const FIELD = { w: 'w', h: 'h', x: 'x', y: 'y', g: 'gap', r: 'r', sw: 'sw', lh: 'lh', dpi: 'dpi', o: 'o' };
     const SIDES = { '': [0, 1, 2, 3], x: [1, 3], y: [0, 2], t: [0], r: [1], b: [2], l: [3] };
     const COLS = ['bg', 'c', 'stroke', 'fx'];
-    const VOCAB = Object.keys(KW).concat(PREFIXES, COLS.map(function (c) { return c + ':'; }));
+    const VOCAB = Object.keys(KW).concat(PREFIXES, COLS.map(function (c) { return c + ':'; }), ['sh1', 'sh2', 'sh3', 'sh4', 'sh5', 'noise']);
     const NUM = /^(-?\d+(?:\.\d+)?)(mm|pt|in|px)?$/;
+    const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 
     const parseProps = function (str) {
         const p = {};
@@ -85,6 +86,20 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
         const toks = String(str === undefined || str === null ? '' : str).split(/\s+/).filter(Boolean);
         toks.forEach(function (t) {
             if (has(KW, t)) { p[KW[t][0]] = KW[t][1]; return; }
+            const sm = /^sh([1-5])(?::(.*))?$/.exec(t);
+            if (sm) {
+                if (sm[2] !== undefined && !HEX.test(sm[2])) { w.push("props: '" + t + "' colour is not hex"); return; }
+                p.sh = parseInt(sm[1], 10);
+                if (sm[2] !== undefined) p.shc = sm[2];
+                return;
+            }
+            const nm = /^noise(?::(.*))?$/.exec(t);
+            if (nm) {
+                const a = nm[1] === undefined ? 0.1 : Number(nm[1]);
+                if (isNaN(a) || a <= 0 || a > 1) { w.push("props: '" + t + "' opacity is not between 0 and 1"); return; }
+                p.noise = a;
+                return;
+            }
             const ci = t.indexOf(':');
             if (ci > 0 && COLS.indexOf(t.slice(0, ci)) >= 0) { p[t.slice(0, ci)] = t.slice(ci + 1); return; }
             if (t.charAt(0) === '#' && t.length > 1) { p.name = t.slice(1); return; }
@@ -214,7 +229,6 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
             });
         }, null);
     };
-    const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
     const color = function (str) {
         const s = String(str);
         if (s === 'none') return { none: true };
@@ -233,6 +247,31 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
         if (pm.hit) return { s: styleDep(pm.hit, null) };
         warn("color: unknown '" + s + "'" + near(s, vars.concat(paints)));
         return null;
+    };
+
+    const shadowsOf = function (level, shc) {
+        const sc = shc === undefined ? { r: 0, g: 0, b: 0, a: 1 } : color(shc).hex;
+        const n = level + 2;
+        const y = Math.pow(2, level);
+        const out = [];
+        for (let j = 1; j <= n; j++) {
+            const t = j / n;
+            const e = t * t;
+            out.push({
+                type: 'DROP_SHADOW',
+                color: { r: sc.r, g: sc.g, b: sc.b, a: Math.round(0.3 / n * (1 - 0.5 * e) * 1000) / 1000 * sc.a },
+                offset: { x: 0, y: Math.round(y * e * 100) / 100 },
+                radius: Math.round(2 * y * e * 100) / 100,
+                spread: 0,
+                visible: true,
+                blendMode: 'NORMAL',
+                showShadowBehindNode: false
+            });
+        }
+        return out;
+    };
+    const noiseOf = function (a) {
+        return { type: 'NOISE', noiseType: 'MONOTONE', color: { r: 0, g: 0, b: 0, a: a }, noiseSize: 0.5, density: 0.5, blendMode: 'NORMAL', visible: true };
     };
 
     const mapProp = function (who, k, val, keys, typeOf, user) {
@@ -449,6 +488,15 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
                 setPaint(node, 'strokes', v.col.stroke);
                 node.strokeWeight = p.sw !== undefined ? p.sw : 1;
                 node.strokeAlign = 'INSIDE';
+            }
+            if (p.sh || p.noise) {
+                const sh = p.sh ? shadowsOf(p.sh, p.shc) : [];
+                if (p.noise) {
+                    try { node.effects = sh.concat([noiseOf(p.noise)]); } catch (e) { warn('noise skipped: ' + msgOf(e)); node.effects = sh; }
+                } else {
+                    node.effects = sh;
+                }
+                if (v.fx) warn('props: fx replaces sh/noise');
             }
             if (v.fx && ok(v.fx)) {
                 const fxId = D[v.fx].value.id;
