@@ -303,7 +303,7 @@ export class FigmaWebSocketServer extends EventEmitter {
    * its fileKey on connect, allowing the server to track multiple files.
    */
   private handleFileInfo(data: any, ws: WebSocket): void {
-    const fileKey = data.fileKey || null;
+    const fileKey = data.fileKey || data.fileName || 'unknown-file';
 
     if (!fileKey) {
       logger.warn('FILE_INFO received without fileKey — client remains pending');
