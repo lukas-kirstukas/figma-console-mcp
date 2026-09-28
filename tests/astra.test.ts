@@ -10,6 +10,7 @@ import {
 	registerAstraTools,
 	writeExports,
 } from "../src/astra";
+import { ASTRA_RUNTIME } from "../src/astra-runtime";
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const OPTS = { resolveMs: 20000, totalMs: 27000, look: null };
@@ -61,6 +62,12 @@ describe("assembleBuild", () => {
 
 	it("writes a U+2028 inside a DS string as its escape", () => {
 		expect(assembleBuild({ name: "a b" }, "", {}, OPTS)).toContain('"a\\u2028b"');
+	});
+
+	it("binds every verb the runtime returns", () => {
+		const line = /const \{([^}]*)\}=__A\.verbs;/.exec(assembleBuild(null, "", {}, OPTS));
+		const verbs = new Function(`return (${ASTRA_RUNTIME})`)()(null, null, {}, OPTS).verbs;
+		expect((line ? line[1].split(",") : []).sort()).toEqual(Object.keys(verbs).sort());
 	});
 
 	it("compiles as an async function body", () => {

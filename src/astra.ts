@@ -13,7 +13,7 @@ type Asset = { b64?: string; svg?: string };
 type Export = { name: string; fmt?: string; ext: string; scale?: number; outline?: boolean; b64: string };
 
 const BUILD_DESCRIPTION = `Build or change Figma frames from a short script of helper verbs. Keys, fonts and imports resolve for you: write no await and no return.
-page(name,props,kids) top-level frame, rebuilt in place; frame(props,kids); inst(name,overrides,props) kit component, overrides by property or variant name; text(str,style,props) style = kit text style or 'Family 16 Bold'; img(asset,props); svg(asset,props); clone(src,name,swaps) copies a page and swaps content; edit(name,swaps); exp(name,'png@4.17'|'jpg'|'pdf'|'svg'|'svg outline') writes a file.
+page(name,props,kids) top-level frame, rebuilt in place; frame(props,kids); inst(name,overrides,props) kit component, overrides by property or variant name; text(str,style,props) style = kit text style or 'Family 16 Bold'; img(asset,props); svg(asset,props); clone(src,name,swaps) copies a page and swaps content; edit(name,swaps); add(target,kids) appends kids to an existing frame; del(name) deletes a node once the build succeeds; exp(name,'png@4.17'|'jpg'|'pdf'|'svg'|'svg outline') writes a file.
 props: 'v|h wrap g8 p16 px py pt pr pb pl m mx my w390 h844 fill fillv hug start|center|end|between mid|cend|base r12 o50 x y abs clip bg:<var|style|#hex> c:<color> stroke:<color> sw1 fx:<effect> sh1-sh5[:#hex] noise[:0.1] lh24 dpi300 #Name'; sizes take mm, pt or in.
 swaps: {nodeName: 'text' | {prop: value} | 'props' | img(asset)}; '.' is the root.
 Returns {ids, warn, files}; an unknown name comes back in warn with the nearest match. A failure keeps nothing.`;
@@ -37,7 +37,7 @@ export function assembleBuild(
 ): string {
 	return [
 		`const __A=(${ASTRA_RUNTIME})(figma,${toScriptJson(ds)},${toScriptJson(assets)},${toScriptJson(opts)});`,
-		"const {page,frame,inst,text,img,svg,clone,edit,exp}=__A.verbs;",
+		"const {page,frame,inst,text,img,svg,clone,edit,add,del,exp}=__A.verbs;",
 		"await (async()=>{",
 		code,
 		"})();",
