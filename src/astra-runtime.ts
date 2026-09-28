@@ -271,7 +271,7 @@ export const ASTRA_RUNTIME = String.raw`function (figma, DS, ASSETS, OPTS) {
         return out;
     };
     const noiseOf = function (a) {
-        return { type: 'NOISE', noiseType: 'MONOTONE', color: { r: 0, g: 0, b: 0, a: a }, noiseSize: 0.5, density: 0.5, blendMode: 'NORMAL', visible: true };
+        return { type: 'NOISE', noiseType: 'MONOTONE', color: { r: 0, g: 0, b: 0, a: a }, noiseSize: 0.5, density: 0.5, visible: true };
     };
 
     const mapProp = function (who, k, val, keys, typeOf, user) {
